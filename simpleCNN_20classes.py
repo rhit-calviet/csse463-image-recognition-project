@@ -186,6 +186,6 @@ plt.title(f"Validation Accuracy over Epochs\nTest Accuracy: {test_acc*100:.2f}%"
 plt.grid(True)
 
 plt.tight_layout()
-plt.savefig(os.path.join(MODELS_DIR, "loss_acc_curves.png"))
+plt.savefig(os.path.join(MODELS_DIR, "loss_acc_curves_20classes.png"))
 plt.close()
 print("Loss and accuracy curves saved")
