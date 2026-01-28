@@ -13,10 +13,11 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 # params
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "..", "data")
-CLASSES = ["cat", "dog", "airplane", "car", "tree"]
+CLASSES = [
+    "cat", "dog", "airplane", "car", "tree"]
 IMG_SIZE = 28
 BATCH_SIZE = 128
-EPOCHS = 10
+EPOCHS = 15
 LR = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLES_PER_CLASS = 20000
@@ -60,7 +61,7 @@ class QuickDrawCNN(nn.Module):
         self.features = nn.Sequential(
             nn.Conv2d(1,32,3,padding=1), nn.ReLU(), nn.MaxPool2d(2),
             nn.Conv2d(32,64,3,padding=1), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(64,128,3,padding=1), nn.ReLU(), nn.MaxPool2d(2)
+            nn.Conv2d(64,128,3,padding=1), nn.ReLU(), nn.MaxPool2d(2),
         )
         self.classifier = nn.Sequential(
             nn.Linear(128*3*3,256), nn.ReLU(), nn.Dropout(0.5), nn.Linear(256,num_classes)
@@ -114,7 +115,7 @@ print(f"Test Accuracy: {correct/total*100:.2f}%")
 
 # Save model
 models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-model_path = os.path.join(models_dir, "simplecnn.pth")
+model_path = os.path.join(models_dir, "simplecnn_20classes.pth")
 torch.save(model.state_dict(), model_path)
 print("Model saved to", model_path)
 
@@ -138,7 +139,7 @@ plt.figure(figsize=(8,8))
 disp.plot(cmap=plt.cm.Blues, xticks_rotation=45)
 plt.title("Confusion Matrix")
 plt.show()
-plot_path = os.path.join(models_dir, "confusion_matrix.png")
+plot_path = os.path.join(models_dir, "confusion_matrix_20classes.png")
 plt.savefig(plot_path)
 print("Confusion matrix saved to", plot_path)
 plt.close()
