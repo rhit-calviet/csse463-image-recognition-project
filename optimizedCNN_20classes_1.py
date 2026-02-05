@@ -1,3 +1,5 @@
+# CHATGPT was used to debug, reformat, and optimize the code to train this model.
+
 import os
 import numpy as np
 import torch
