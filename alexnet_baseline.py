@@ -1,187 +1,266 @@
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'  # GPU 4
-
+import os, subprocess, copy
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from torchvision import models, transforms
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.model_selection import ParameterGrid
+import pandas as pd
 
-torch.cuda.empty_cache()
+# GPU AUTO SELECT (Idea taken from Chat-GPT as a way to find unused GPU)
+def get_free_gpu():
+    try:
+        smi = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"]
+        ).decode("utf-8")
+        free_mem = [int(x) for x in smi.strip().split("\n")]
+        return str(free_mem.index(max(free_mem)))
+    except:
+        return "0"
 
+os.environ["CUDA_VISIBLE_DEVICES"] = get_free_gpu()
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+torch.backends.cudnn.benchmark = True
+scaler = torch.amp.GradScaler("cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Hyperparamaters
 DATA_DIR = "../data/"
-SAMPLES_PER_CLASS = 5000   
-BATCH_SIZE = 16  
-EPOCHS = 15
-LR = 0.001
+SAMPLES_PER_CLASS = 5000
+EPOCHS = 20
+PATIENCE = 5  # Early stopping
 
-# 5 classes
-# classes = [
-#    "airplane","apple","banana","basketball","bird"
-# ]
+param_grid = {
+    'batch_size': [128, 256],
+    'lr': [5e-4, 1e-4],
+    'weight_decay': [1e-4],
+    'dropout_rate': [0.4, 0.5]
+}
 
-#all 20 classes
-classes = [
-    "airplane","apple","banana","basketball","bird","book","butterfly",
-    "car","cat","chair","cloud","cow","dog","flower","hand",
-    "horse","star","sun","tree","umbrella"
-]
-# DATASET 
+classes = ["airplane","apple","banana","basketball","bird","book","butterfly",
+           "car","cat","chair","cloud","cow","dog","flower","hand",
+           "horse","star","sun","tree","umbrella"]
+
+# Dataset
 class QuickDrawDataset(Dataset):
-    def __init__(self, data_dir, classes, samples_per_class, transform=None):
-        self.images = []
-        self.labels = []
-        self.transform = transform
-
-        print("Loading QuickDraw data...")
-        for label, cname in enumerate(tqdm(classes, desc="Loading classes")):
-            path = os.path.join(data_dir, cname + ".npy")
-            data = np.load(path)
-            data = data[:samples_per_class]
-
+    def __init__(self, data_dir, classes, samples_per_class):
+        self.images, self.labels = [], []
+        print("Loading data into memory...")
+        for label, cname in enumerate(tqdm(classes)):
+            data = np.load(os.path.join(data_dir, cname + ".npy"))[:samples_per_class]
             for img in data:
-                img = img.reshape(28, 28).astype(np.uint8)
-                self.images.append(img)
+                # Resize to AlexNet standard input size
+                img = Image.fromarray(img.reshape(28,28).astype(np.uint8)).resize((227,227))
+                self.images.append(np.array(img))
                 self.labels.append(label)
 
-        print(f"Loaded {len(self.images)} images.")
+    def __len__(self): return len(self.images)
 
-    def __len__(self):
-        return len(self.images)
+full_dataset = QuickDrawDataset(DATA_DIR, classes, SAMPLES_PER_CLASS)
 
-    def __getitem__(self, idx):
-        img = Image.fromarray(self.images[idx])
-        if self.transform:
-            img = self.transform(img)
-        return img, self.labels[idx]
+train_size = int(0.7 * len(full_dataset))
+val_size   = int(0.15 * len(full_dataset))
+test_size  = len(full_dataset) - train_size - val_size
 
-# TRANSFORMS 
-transform = transforms.Compose([
-    transforms.Resize((227, 227)),
-    transforms.Grayscale(num_output_channels=3),
+train_idx, val_idx, test_idx = torch.utils.data.random_split(
+    range(len(full_dataset)),
+    [train_size, val_size, test_size],
+    generator=torch.Generator().manual_seed(42)
+)
+
+# Translations
+train_tf = transforms.Compose([
+    transforms.RandomAffine(15, translate=(0.1, 0.1)),
+    transforms.RandomHorizontalFlip(),
+    transforms.Grayscale(3),
     transforms.ToTensor(),
     transforms.Normalize([0.5]*3, [0.5]*3)
 ])
 
-dataset = QuickDrawDataset(DATA_DIR, classes, SAMPLES_PER_CLASS, transform)
+val_tf = transforms.Compose([
+    transforms.Grayscale(3),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5]*3, [0.5]*3)
+])
 
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
-train_set, val_set = random_split(dataset, [train_size, val_size])
+class Subset(Dataset):
+    def __init__(self, dataset, indices, tf):
+        self.dataset, self.indices, self.tf = dataset, indices.indices, tf
+    def __len__(self): return len(self.indices)
+    def __getitem__(self, i):
+        img = Image.fromarray(self.dataset.images[self.indices[i]])
+        label = self.dataset.labels[self.indices[i]]
+        return self.tf(img), label
 
-train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
-val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, num_workers=2, pin_memory=True)
+train_set = Subset(full_dataset, train_idx, train_tf)
+val_set   = Subset(full_dataset, val_idx, val_tf)
+test_set  = Subset(full_dataset, test_idx, val_tf)
 
-# MODEL 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = models.alexnet(weights=models.AlexNet_Weights.IMAGENET1K_V1)
+# model
+class ModifiedAlexNet(nn.Module):
+    def __init__(self, num_classes, dropout):
+        super().__init__()
+        self.base = models.alexnet(weights=models.AlexNet_Weights.IMAGENET1K_V1)
+        self.base.classifier = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(256*6*6, 4096), nn.ReLU(True),
+            nn.Dropout(dropout),
+            nn.Linear(4096, 4096), nn.ReLU(True),
+            nn.Linear(4096, num_classes),
+        )
+    def forward(self, x): return self.base(x)
 
-for param in model.features.parameters():
-    param.requires_grad = False
+    def freeze_features(self):
+        for p in self.base.features.parameters(): p.requires_grad = False
 
-model.classifier[6] = nn.Linear(4096, len(classes))
-model = model.to(device)
+    def unfreeze_last(self):
+        # Fine-tuning: enable gradients for the last few layers of the backbone
+        for p in list(self.base.features.parameters())[-4:]: 
+            p.requires_grad = True
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.classifier.parameters(), lr=LR)
+# Training
+def train_model(model, train_loader, val_loader, optimizer, criterion, scheduler):
+    best_acc = 0
+    best_wts = None
+    patience_ctr = 0
+    history = {"train": [], "val": []}
 
-# TRAINING 
-train_losses = []
-val_losses = []
-best_val_acc = 0
+    
 
-for epoch in range(EPOCHS):
-    model.train()
-    running_loss = 0
+    for epoch in range(EPOCHS):
+        # Unfreeze backbone at epoch 4 for fine-tuning
+        if epoch == 4:
+            print("\n[INFO] Epoch 4: Unfreezing backbone for fine-tuning.")
+            if isinstance(model, nn.DataParallel):
+                model.module.unfreeze_last()
+            else:
+                model.unfreeze_last()
 
-    train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]")
-
-    for images, labels in train_pbar:
-        images, labels = images.to(device), labels.to(device)
-
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-        train_pbar.set_postfix({'loss': f'{loss.item():.4f}'})
-
-    avg_train_loss = running_loss / len(train_loader)
-    train_losses.append(avg_train_loss)
-
-    #  VALIDATION 
-    model.eval()
-    val_running_loss = 0
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-
-            loss = criterion(outputs, labels)
-            val_running_loss += loss.item()
-
-            _, predicted = torch.max(outputs, 1)
+        model.train()
+        correct = total = 0
+        t_loader = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]")
+        
+        for imgs, labels in t_loader:
+            imgs, labels = imgs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            
+            with torch.amp.autocast("cuda"):
+                out = model(imgs)
+                loss = criterion(out, labels)
+            
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            
+            pred = out.argmax(1)
+            correct += (pred == labels).sum().item()
             total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            t_loader.set_postfix({"acc": f"{100*correct/total:.2f}%"})
 
-    avg_val_loss = val_running_loss / len(val_loader)
-    val_losses.append(avg_val_loss)
+        train_acc = 100 * correct / total
+        history["train"].append(train_acc)
 
-    val_accuracy = 100 * correct / total
+        # Validation
+        model.eval()
+        correct = total = 0
+        with torch.no_grad():
+            for imgs, labels in val_loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                out = model(imgs)
+                pred = out.argmax(1)
+                correct += (pred == labels).sum().item()
+                total += labels.size(0)
+        
+        val_acc = 100 * correct / total
+        history["val"].append(val_acc)
+        scheduler.step(1 - (val_acc/100))
 
-    print(f"Epoch [{epoch+1}/{EPOCHS}] "
-          f"Train Loss: {avg_train_loss:.4f} | "
-          f"Val Loss: {avg_val_loss:.4f} | "
-          f"Val Acc: {val_accuracy:.2f}%")
+        print(f"Epoch {epoch+1} Results - Train: {train_acc:.2f}% | Val: {val_acc:.2f}%")
 
-    if val_accuracy > best_val_acc:
-        best_val_acc = val_accuracy
-        torch.save(model.state_dict(), "best_model.pth")
+        if val_acc > best_acc:
+            best_acc = val_acc
+            best_wts = copy.deepcopy(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict())
+            patience_ctr = 0
+        else:
+            patience_ctr += 1
+        
+        if patience_ctr >= PATIENCE:
+            print("Early stopping triggered.")
+            break
 
-#  LOSS CURVE PLOT 
-plt.figure()
-plt.plot(train_losses, label='Train Loss')
-plt.plot(val_losses, label='Validation Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training vs Validation Loss')
-plt.legend()
-plt.grid(True)
-plt.savefig("alexnet_loss_curve_weston.png", dpi=300, bbox_inches='tight')
+    model.load_state_dict(best_wts)
+    return model, best_acc, history
 
-#  CONFUSION MATRIX 
-model.load_state_dict(torch.load("best_model.pth"))
-model.eval()
+# GRID SEARCH 
+results = []
+best_overall_acc = 0
+best_overall_params = None
+best_overall_state = None
 
-all_preds = []
-all_labels = []
+for params in ParameterGrid(param_grid):
+    print(f"\n{'#'*40}\nTesting Params: {params}\n{'#'*40}")
+    
+    t_loader = DataLoader(train_set, batch_size=params['batch_size'], shuffle=True, num_workers=8, pin_memory=True)
+    v_loader = DataLoader(val_set, batch_size=params['batch_size'], num_workers=8, pin_memory=True)
+    
+    model = ModifiedAlexNet(len(classes), params['dropout_rate']).to(device)
+    model.freeze_features()
+    
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+
+    optimizer = optim.AdamW(model.parameters(), lr=params['lr'], weight_decay=params['weight_decay'])
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min')
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+    model, val_acc, history = train_model(model, t_loader, v_loader, optimizer, criterion, scheduler)
+    
+    results.append({"params": params, "val_acc": val_acc, "history": history})
+
+    if val_acc > best_overall_acc:
+        best_overall_acc = val_acc
+        best_overall_params = params
+        best_overall_state = copy.deepcopy(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict())
+
+# TEST
+torch.save(best_overall_state, "best_gridsearch_model.pth")
+print(f"\nBest Params Found: {best_overall_params} with {best_overall_acc:.2f}% Val Acc")
+
+final_model = ModifiedAlexNet(len(classes), best_overall_params['dropout_rate']).to(device)
+final_model.load_state_dict(torch.load("best_gridsearch_model.pth"))
+final_model.eval()
+
+test_loader = DataLoader(test_set, batch_size=best_overall_params['batch_size'], num_workers=4)
+all_preds, all_labels = [], []
 
 with torch.no_grad():
-    for images, labels in val_loader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = model(images)
-        _, predicted = torch.max(outputs, 1)
+    for imgs, labels in tqdm(test_loader, desc="Final Testing"):
+        imgs = imgs.to(device)
+        pred = final_model(imgs).argmax(1).cpu().numpy()
+        all_preds.extend(pred)
+        all_labels.extend(labels.numpy())
 
-        all_preds.extend(predicted.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
+test_acc = 100 * (np.array(all_preds) == np.array(all_labels)).mean()
+print(f"\nFINAL TEST ACCURACY: {test_acc:.2f}%")
+
+# plots
+plt.figure(figsize=(10,6))
+best_run = max(results, key=lambda x: x["val_acc"])
+plt.plot(best_run["history"]["train"], label="Train Acc")
+plt.plot(best_run["history"]["val"], label="Val Acc")
+plt.title(f"Best Model Curves (LR: {best_overall_params['lr']})")
+plt.legend()
+plt.savefig("gs_performance_curves.png")
 
 cm = confusion_matrix(all_labels, all_preds)
+plt.figure(figsize=(12,10))
+ConfusionMatrixDisplay(cm, display_labels=classes).plot(xticks_rotation=45, cmap="Blues")
+plt.savefig("gs_confusion_matrix.png")
 
-plt.figure(figsize=(8,6))
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
-disp.plot(cmap='Blues', xticks_rotation=45)
-plt.title("Confusion Matrix")
-plt.savefig("alexnet_confusion_matrix_weston.png", dpi=300, bbox_inches='tight')
-
-print(f"\nBest Validation Accuracy: {best_val_acc:.2f}%")
-
+print("Grid search and evaluation complete.")
