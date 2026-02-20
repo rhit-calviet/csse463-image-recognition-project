@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sketch to 3D Airplane Pipeline</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #1a1a2e;
+            color: white;
+            padding-bottom: 50px;
+        }
+
+        .main-ui {
+            display: flex;
+            gap: 40px;
+            margin-top: 30px;
+            align-items: flex-start;
+        }
+
+        canvas {
+            border: 4px solid #16213e;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            cursor: crosshair;
+        }
+
+        .controls {
+            margin: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+
+        .btn-clear    { background: #e94560; color: white; }
+        .btn-classify { background: #0f3460; color: white; border: 1px solid #533483; }
+        .btn-3d       { background: #4ecca3; color: #1a1a2e; display: none; }
+        button:hover  { opacity: 0.8; transform: translateY(-2px); }
+
+        #results-panel {
+            width: 350px;
+            background: #16213e;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #533483;
+        }
+
+        .prediction-row { margin-bottom: 15px; }
+        .label-group { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.9em; }
+        .conf-bar    { background: #0f3460; height: 12px; border-radius: 6px; overflow: hidden; }
+        .conf-fill   { background: #4ecca3; height: 100%; transition: width 0.5s ease-out; }
+
+        .status-msg  { margin-top: 15px; color: #4ecca3; font-weight: bold; min-height: 1.2em; }
+
+        /* Output buttons strip */
+        .output-strip {
+            display: none;
+            gap: 16px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .btn-newtab {
+            padding: 12px 24px;
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            letter-spacing: 0.5px;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn-newtab:hover { background: #4ecca3; color: #1a1a2e; }
+
+        /* Spinner for mesh */
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #4ecca3;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <h1>Sketch → 3D Airplane Pipeline</h1>
+
+    <div class="main-ui">
+        <div>
+            <canvas id="canvas" width="280" height="280"></canvas>
+            <div class="controls">
+                <button class="btn-clear"    onclick="clearCanvas()">Clear</button>
+                <button class="btn-classify" onclick="classify()">Classify</button>
+                <button id="btn3D" class="btn-3d" onclick="generate3D()">Generate 3D Model</button>
+            </div>
+        </div>
+
+        <div id="results-panel">
+            <h3 style="margin-top:0">Classifier Confidence</h3>
+            <div id="prediction-list">Draw something to begin...</div>
+            <div id="status" class="status-msg"></div>
+        </div>
+    </div>
+
+    <!-- Output buttons appear progressively -->
+    <div class="output-strip" id="output-strip">
+        <button class="btn-newtab" id="btn-points" style="display:none"
+                onclick="window.open('/static/points_viz.html', '_blank')">
+            ⬡ Open Point Cloud
+        </button>
+        <span id="mesh-pending" style="display:none; color:#4ecca3; font-size:0.9em; align-self:center;">
+            <span class="spinner"></span> Building mesh…
+        </span>
+        <button class="btn-newtab" id="btn-mesh" style="display:none"
+                onclick="window.open('/static/mesh_viz.html', '_blank')">
+            ⬡ Open Reconstructed Mesh
+        </button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx    = canvas.getContext('2d');
+        let drawing  = false;
+
+        function initCanvas() {
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        initCanvas();
+
+        canvas.addEventListener('mousedown', () => drawing = true);
+        canvas.addEventListener('mouseup',   () => { drawing = false; ctx.beginPath(); });
+        canvas.addEventListener('mousemove', draw);
+
+        function draw(e) {
+            if (!drawing) return;
+            const rect = canvas.getBoundingClientRect();
+            ctx.lineWidth   = 14;
+            ctx.lineCap     = 'round';
+            ctx.strokeStyle = 'black';
+            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            document.getElementById('btn3D').style.display        = 'none';
+            document.getElementById('output-strip').style.display = 'none';
+            document.getElementById('btn-points').style.display   = 'none';
+            document.getElementById('btn-mesh').style.display     = 'none';
+            document.getElementById('mesh-pending').style.display = 'none';
+            document.getElementById('prediction-list').innerHTML   = "Draw something to begin...";
+            document.getElementById('status').innerHTML            = "";
+        }
+
+        async function classify() {
+            const dataURL  = canvas.toDataURL('image/png');
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataURL })
+            });
+            const data = await response.json();
+
+            let html = '';
+            data.predictions.forEach(p => {
+                const pct = (p.confidence * 100).toFixed(1);
+                html += `
+                    <div class="prediction-row">
+                        <div class="label-group">
+                            <span>${p.label.toUpperCase()}</span>
+                            <span>${pct}%</span>
+                        </div>
+                        <div class="conf-bar">
+                            <div class="conf-fill" style="width:${pct}%"></div>
+                        </div>
+                    </div>`;
+            });
+            document.getElementById('prediction-list').innerHTML = html;
+            document.getElementById('btn3D').style.display =
+                data.predictions[0].label === 'airplane' ? 'inline-block' : 'none';
+        }
+
+        async function generate3D() {
+            const status      = document.getElementById('status');
+            const strip       = document.getElementById('output-strip');
+            const btnPoints   = document.getElementById('btn-points');
+            const btnMesh     = document.getElementById('btn-mesh');
+            const meshPending = document.getElementById('mesh-pending');
+            const imageData   = canvas.toDataURL('image/png');
+
+            // Reset output area
+            strip.style.display       = 'none';
+            btnPoints.style.display   = 'none';
+            btnMesh.style.display     = 'none';
+            meshPending.style.display = 'none';
+            status.innerHTML          = "⚙️ Generating point cloud…";
+
+            const pcRes  = await fetch('/generate_pointcloud', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ image: imageData })
+            });
+            const pcData = await pcRes.json();
+
+            if (pcData.status !== 'success') {
+                status.innerHTML = "Error generating point cloud.";
+                return;
+            }
+
+            // Show point cloud button immediately
+            strip.style.display       = 'flex';
+            btnPoints.style.display   = 'inline-block';
+            meshPending.style.display = 'inline-flex';
+            status.innerHTML = `Point cloud ready (${pcData.points_count} pts). Building mesh…`;
+
+            strip.scrollIntoView({ behavior: 'smooth' });
+
+            const meshRes  = await fetch('/generate_mesh', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({})
+            });
+            const meshData = await meshRes.json();
+
+            meshPending.style.display = 'none';
+
+            if (meshData.status === 'success') {
+                btnMesh.style.display = 'inline-block';
+                status.innerHTML = `Done — ${pcData.points_count} pts · ${meshData.vertices} verts · ${meshData.triangles} tris`;
+            } else {
+                status.innerHTML = "Error building mesh.";
+            }
+        }
+    </script>
+</body>
+</html>
