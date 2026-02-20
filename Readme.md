@@ -39,7 +39,7 @@ There is also a `models` and `data` folder that is not in the repository. Save t
    hand, horse, umbrella, star, sun
    ```
    There is also the improved version to expand to a 30-class list (see `sketch_to_3d/app.py`).
-2. Place the `.npy` files in `data/` (e.g., `data/cat.npy`, `data/dog.npy`, ...).
+2. Place the `.npy` files in `data/`.
 
 ### 2. ShapeNet Sketch → Point Cloud Reconstruction
 
@@ -55,14 +55,14 @@ There is also a `models` and `data` folder that is not in the repository. Save t
 - `Reconstruction/reconstruction_model.py` writes `models/best_model.pt` and intermediate plots to `Reconstruction/plots/`.
 - The Flask demo expects:
   - `models/simpleCNN_30classes.pth` (sketch classifier).
-  - `models/advanced_encoder_decoder_model.pt` (advanced reconstruction model checkpoint).
+  - `models/advanced_encoder_decoder_model.pt` (advanced reconstruction model).
 Feel free to rename or replace these lines with whatever model you end up running.
 
 ## Interactive Demo (`sketch_to_3d/`)
 
-1. Ensure the checkpoints listed in [Trained Weights](#3-trained-weights) are present.
+1. Ensure the checkpoints listed in `app.py` are present.
 2. Launch the Flask app:
    ```bash
    python sketch_to_3d/app.py
    ```
-3. Navigate to `http://127.0.0.1:5000/`. Draw a sketch, run classification, generate the point cloud, and finally build the mesh.  
+3. Go to `http://127.0.0.1:5000/`. Draw a sketch, run classification, generate the point cloud, and finally build the mesh.  
