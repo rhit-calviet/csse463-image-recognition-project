@@ -41,77 +41,90 @@ class QuickDrawCNN(nn.Module):
         x = x.view(x.size(0), -1)
         return self.classifier(x)
 
-class ChannelAttention(nn.Module):
-    def __init__(self, in_channels, reduction=16):
+class FoldingDecoder(nn.Module):
+    def __init__(self, latent=512, num_points=2048):
         super().__init__()
-        self.avg_pool, self.max_pool = nn.AdaptiveAvgPool2d(1), nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(in_channels, in_channels // reduction, bias=False), nn.ReLU(),
-            nn.Linear(in_channels // reduction, in_channels, bias=False),
+
+        self.num_points = num_points
+
+        self.mlp = nn.Sequential(
+            nn.Linear(latent + 2, 512),
+            nn.ReLU(),
+            nn.Linear(512,512),
+            nn.ReLU(),
+            nn.Linear(512,3)
         )
-        self.sigmoid = nn.Sigmoid()
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        avg_out = self.fc(self.avg_pool(x).view(b, c))
-        max_out = self.fc(self.max_pool(x).view(b, c))
-        return x * self.sigmoid(avg_out + max_out).view(b, c, 1, 1)
 
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.attention = ChannelAttention(out_channels)
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(nn.Conv2d(in_channels, out_channels, 1, stride, bias=False), nn.BatchNorm2d(out_channels))
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out = self.attention(out)
-        return F.relu(out + self.shortcut(x))
+        grid = torch.rand(num_points,2)*2-1
+        self.register_buffer("grid", grid)
 
-class Config: pass # Dummy for pickle loading
+    def forward(self, z):
 
-class AdvancedSketchEncoder(nn.Module):
+        B = z.shape[0]
+
+        grid = self.grid.unsqueeze(0).repeat(B,1,1)
+        z = z.unsqueeze(1).repeat(1,self.num_points,1)
+
+        x = torch.cat([grid,z], dim=-1)
+
+        return self.mlp(x)
+
+class SketchEncoder(nn.Module):
+
     def __init__(self, in_channels=3, latent_dim=512):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, 64, 3, 1, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.layer1 = nn.Sequential(ResidualBlock(64, 128, 2), ResidualBlock(128, 128))
-        self.layer2 = nn.Sequential(ResidualBlock(128, 256, 2), ResidualBlock(256, 256))
-        self.layer3 = nn.Sequential(ResidualBlock(256, 512, 2), ResidualBlock(512, 512))
-        self.gap, self.gmp = nn.AdaptiveAvgPool2d(1), nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(nn.Linear(1024, 512), nn.ReLU(), nn.Dropout(0.3), nn.Linear(512, latent_dim))
+        
+        # Input: (batch, in_channels, 28, 28)
+        self.features = nn.Sequential(
+            # Block 1: 28x28 -> 14x14
+            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.2),
+
+            # Block 2: 14x14 -> 7x7
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.3),
+
+            # Block 3: 7x7 -> 3x3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.4)
+        )
+        
+        # After features, the shape is (batch, 128, 3, 3)
+        # 128 * 3 * 3 = 1152
+        
+        self.latent_layer = nn.Sequential(
+            nn.Linear(128 * 3 * 3, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(1024, latent_dim)
+        )
+
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = self.layer3(self.layer2(self.layer1(x)))
-        x = torch.cat([self.gap(x).view(x.size(0), -1), self.gmp(x).view(x.size(0), -1)], dim=1)
-        return self.fc(x)
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        z = self.latent_layer(x)
+        return z
 
-class FoldingDecoder(nn.Module):
-    def __init__(self, latent_dim=512, num_points=2048):
-        super().__init__()
-        self.num_points = num_points
-        self.fold1 = nn.Sequential(nn.Linear(latent_dim + 2, 512), nn.ReLU(), nn.Linear(512, 512), nn.ReLU(), nn.Linear(512, 3))
-        self.fold2 = nn.Sequential(nn.Linear(latent_dim + 3, 512), nn.ReLU(), nn.Linear(512, 512), nn.ReLU(), nn.Linear(512, 3))
-        sqrt_n = int(np.ceil(np.sqrt(num_points)))
-        grid = np.stack(np.meshgrid(np.linspace(-1, 1, sqrt_n), np.linspace(-1, 1, sqrt_n)), axis=-1).reshape(-1, 2)[:num_points]
-        self.register_buffer("grid", torch.from_numpy(grid).float())
-    def forward(self, z):
-        grid = self.grid.unsqueeze(0).repeat(z.size(0), 1, 1)
-        z_ext = z.unsqueeze(1).repeat(1, self.num_points, 1)
-        x1 = self.fold1(torch.cat([grid, z_ext], dim=-1))
-        return self.fold2(torch.cat([x1, z_ext], dim=-1))
-
+# model
 class Sketch2Point(nn.Module):
-    def __init__(self, latent_dim=512, num_points=2048):
+    def __init__(self):
         super().__init__()
-        self.encoder = AdvancedSketchEncoder(in_channels=3, latent_dim=latent_dim)
-        self.decoder = FoldingDecoder(latent_dim=latent_dim, num_points=num_points)
-    def forward(self, x): return self.decoder(self.encoder(x))
+
+        self.encoder = SketchEncoder(in_channels=3, latent_dim=512)
+        self.decoder = FoldingDecoder()
+
+    def forward(self,x):
+        z = self.encoder(x)
+        return self.decoder(z)
 
 app = Flask(__name__)
 
@@ -127,8 +140,7 @@ clf_model.load_state_dict(torch.load("../../models/simpleCNN_30classes.pth", map
 clf_model.eval()
 
 recon_model = Sketch2Point().to(DEVICE)
-checkpoint = torch.load("../../models/complete_model.pt", map_location=DEVICE, weights_only=False)
-recon_model.load_state_dict(checkpoint["model_state_dict"])
+recon_model.load_state_dict(torch.load("../../models/advanced_encoder_decoder_model.pt", map_location=DEVICE))
 recon_model.eval()
 
 # Store raw points between requests so /generate_mesh can reuse them
@@ -245,7 +257,6 @@ def predict():
 
 @app.route('/generate_pointcloud', methods=['POST'])
 def generate_pointcloud():
-    """Step 1: Run model inference and return the dense point cloud immediately."""
     data = request.json['image']
     image_data = base64.b64decode(data.split(',')[1])
     img_rgb = Image.open(BytesIO(image_data)).convert("RGB").resize((28, 28))
@@ -290,7 +301,6 @@ def generate_pointcloud():
 
 @app.route('/generate_mesh', methods=['POST'])
 def generate_mesh():
-    """Step 2: Build the mesh from the cached points (slow part)."""
     points = _cached_points.get('latest')
     if points is None:
         return jsonify({"status": "error", "message": "No point cloud cached. Call /generate_pointcloud first."})
