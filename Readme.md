@@ -8,8 +8,6 @@ This repository contains all of the experimental code for our CSSE 463 final pro
 
 Everything here is documented so you can recreate our results, run our trained models, or extend the experiments.
 
----
-
 ## Repository Layout
 
 - `Classification/` – PyTorch scripts for the AlexNet, ResNet18, and custom CNN experiments.
