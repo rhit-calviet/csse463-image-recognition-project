@@ -15,6 +15,7 @@ from torchvision import transforms
 import plotly.graph_objects as go
 import plotly.io as pio
 
+# tommaso and weston code for models
 class QuickDrawCNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -146,6 +147,7 @@ recon_model.eval()
 # Store raw points between requests so /generate_mesh can reuse them
 _cached_points = {}
 
+# connors code
 def local_surface_upsample(pcd, k=6):
     points = np.asarray(pcd.points)
     kdtree = o3d.geometry.KDTreeFlann(pcd)
@@ -179,11 +181,9 @@ def build_advanced_mesh(points):
     combined_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=4*avg_dist2, max_nn=100))
     combined_pcd.orient_normals_consistent_tangent_plane(90)
 
-    # BPA sweep
     radii = o3d.utility.DoubleVector([avg_dist2 * f for f in [1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.4, 2.8, 3, 3.5, 4, 4.5]])
     mesh_bpa = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(combined_pcd, radii)
 
-    # Boundary detection for hole filling
     triangles = np.asarray(mesh_bpa.triangles)
     edge_count = defaultdict(int)
     for tri in triangles:
@@ -231,6 +231,7 @@ def static_files(filename):
 def index():
     return render_template('index.html')
 
+# putting everything together
 @app.route('/predict', methods=['POST'])
 def predict():
     data = request.json['image']
