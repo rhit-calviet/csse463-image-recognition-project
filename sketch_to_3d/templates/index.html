@@ -3,6 +3,7 @@
 <head>
     <title>Sketch to 3D Airplane Pipeline</title>
     <style>
+         /* basic css */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             display: flex;
@@ -63,7 +64,6 @@
 
         .status-msg  { margin-top: 15px; color: #4ecca3; font-weight: bold; min-height: 1.2em; }
 
-        /* Output buttons strip */
         .output-strip {
             display: none;
             gap: 16px;
@@ -86,7 +86,6 @@
         }
         .btn-newtab:hover { background: #4ecca3; color: #1a1a2e; }
 
-        /* Spinner for mesh */
         .spinner {
             display: inline-block;
             width: 14px;
@@ -121,18 +120,18 @@
         </div>
     </div>
 
-    <!-- Output buttons appear progressively -->
+    <!-- make buttons appear one at atime when the point cloud and mesh are ready -->
     <div class="output-strip" id="output-strip">
         <button class="btn-newtab" id="btn-points" style="display:none"
                 onclick="window.open('/static/points_viz.html', '_blank')">
-            ⬡ Open Point Cloud
+            Open Point Cloud
         </button>
         <span id="mesh-pending" style="display:none; color:#4ecca3; font-size:0.9em; align-self:center;">
             <span class="spinner"></span> Building mesh…
         </span>
         <button class="btn-newtab" id="btn-mesh" style="display:none"
                 onclick="window.open('/static/mesh_viz.html', '_blank')">
-            ⬡ Open Reconstructed Mesh
+            Open Reconstructed Mesh
         </button>
     </div>
 
