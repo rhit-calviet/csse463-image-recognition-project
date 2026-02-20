@@ -31,14 +31,12 @@ There is also a `models` and `data` folder that is not in the repository. Save t
 
 ### 1. QuickDraw Sketch Classification
 
-1. Visit the [QuickDraw Cloud bucket](https://console.cloud.google.com/storage/browser/quickdraw_dataset/full/numpy_bitmap) and download the `.npy` files for the 20 classes used in the optimized CNNs:
+1. Visit the [QuickDraw Cloud bucket](https://console.cloud.google.com/storage/browser/quickdraw_dataset/full/numpy_bitmap) and download the `.npy` files for the 30 classes used in the optimized CNNs:
    ```
-   cat, dog, airplane, car, tree,
-   apple, banana, bird, basketball, book,
-   butterfly, chair, cloud, cow, flower,
-   hand, horse, umbrella, star, sun
+   ["cat", "dog", "airplane", "car", "tree", "apple", "banana", "bird", "basketball", "book",
+    "butterfly", "chair", "cloud", "cow", "flower", "hand", "horse", "umbrella", "star", "sun",
+    "bicycle", "cake", "fish", "guitar", "house", "moon", "mug", "octopus", "pencil", "fork"]
    ```
-   There is also the improved version to expand to a 30-class list (see `sketch_to_3d/app.py`).
 2. Place the `.npy` files in `data/`.
 
 ### 2. ShapeNet Sketch → Point Cloud Reconstruction
