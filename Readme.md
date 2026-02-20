@@ -55,7 +55,7 @@ There is also a `models` and `data` folder that is not in the repository. Save t
 - `Reconstruction/reconstruction_model.py` writes `models/best_model.pt` and intermediate plots to `Reconstruction/plots/`.
 - The Flask demo expects:
   - `models/simpleCNN_30classes.pth` (sketch classifier).
-  - `models/complete_model.pt` (advanced reconstruction model checkpoint).
+  - `models/advanced_encoder_decoder_model.pt` (advanced reconstruction model checkpoint).
 Feel free to rename or replace these lines with whatever model you end up running.
 
 ## Interactive Demo (`sketch_to_3d/`)
